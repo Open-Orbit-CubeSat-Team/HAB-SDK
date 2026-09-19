@@ -62,13 +62,14 @@ if __name__ == "__main__":
     launch_site = LaunchSite(0.0)  # MSL reference for the chart
 
     # --- Sweep ranges (first take; adjust after you see the envelope) ---
-    fill_volumes = np.linspace(100, 400, 101)            # ft^3  600,1500: 0-300; 4000: 100-400;
-    suspended_masses = np.linspace(0, 3, 101)         # kg
+    fill_volumes = np.linspace(0, 250, 101)            # ft^3  300: 0-250, 600,1500: 0-300; 4000: 100-400;
+    suspended_masses = np.linspace(0, 3, 101)          # kg
 
     mission_profiles = []
 
     for m_payload in suspended_masses:
         for v_fill in fill_volumes:
+            b = Balloon(0.30, 3.78, 0.55, "Helium", float(v_fill))  #Kaymont 300g
             #b = Balloon(0.60, 6.02, 0.55, "Helium", float(v_fill))  #Kaymont 600g
             #b = Balloon(0.80, 7.00, 0.55, "Helium", float(v_fill))  #Kaymont 800g
             #b = Balloon(1.00, 7.86, 0.55, "Helium", float(v_fill))  #Kaymont 1000g
@@ -76,7 +77,7 @@ if __name__ == "__main__":
             #b = Balloon(1.50, 9.44, 0.55, "Helium", float(v_fill))  #Kaymont 1500g
             #b = Balloon(2.00, 10.54, 0.55, "Helium", float(v_fill)) #Kaymont 2000g
             #b = Balloon(3.00, 13.00, 0.55, "Helium", float(v_fill)) #Kaymont 3000g
-            b = Balloon(4.00, 15.06, 0.55, "Helium", float(v_fill)) #Kaymont 4000g
+            #b = Balloon(4.00, 15.06, 0.55, "Helium", float(v_fill)) #Kaymont 4000g
             p = Payload(m_payload, 4 * 0.3048, 0.5)
             mission_profiles.append(MissionProfile(launch_site, b, p))
 
@@ -831,7 +832,7 @@ if __name__ == "__main__":
     X_edges_hi = centers_to_edges(x_hi)
     Y_edges_hi = centers_to_edges(y_hi)
 
-    '''##################################################
+    ##################################################
     # Start Color Gradient                           #
     ##################################################
 
@@ -852,9 +853,9 @@ if __name__ == "__main__":
         shading="flat",
         cmap=vbar_cmap,
         zorder=1
-    )'''
+    )
 
-    ##################################################
+    '''##################################################
     # Start Black and White Gradient                 #
     ##################################################
 
@@ -874,7 +875,7 @@ if __name__ == "__main__":
         shading="flat",
         cmap=bw_target_cmap,
         zorder=1
-    )
+    )'''
 
     # 2) Shade infeasible region on top using the same hi-res plotting
     # grid as the background, so no red fringe can peek through.
@@ -955,7 +956,7 @@ if __name__ == "__main__":
             sample_field=C_hi,
             sample_x=x_hi,
             sample_y=y_hi,
-            sample_cmap=bw_target_cmap,              #Color: vbar_cmap, BW: bw_target_cmap
+            sample_cmap=vbar_cmap,              #Color: vbar_cmap, BW: bw_target_cmap
             sample_infeasible_mask=(Z_a0_hi <= 0.0).astype(float),
             zorder=7,
         ),
@@ -965,7 +966,7 @@ if __name__ == "__main__":
     cs_vtarget = ax.contour(
         x_hi, y_hi, Z_plot_hi,
         levels=[5.0],
-        colors="#6b6b6b",           #Color: #177540, BW: #9a9a9a
+        colors="#177540",           #Color: #177540, BW: #9a9a9a
         linewidths=1.5,
         linestyles="--",
         zorder=5
@@ -989,15 +990,15 @@ if __name__ == "__main__":
             sample_field=C_hi,
             sample_x=x_hi,
             sample_y=y_hi,
-            sample_cmap=bw_target_cmap,              #Color: vbar_cmap, BW: bw_target_cmap
+            sample_cmap=vbar_cmap,              #Color: vbar_cmap, BW: bw_target_cmap
             sample_infeasible_mask=(Z_a0_hi <= 0.0).astype(float),
             zorder=7,
         ),
     )
 
     # 4) Performance contours on top
-    alt_levels = [36, 37, 38, 39, 40, 41, 42] #1500g [29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39] #600g [20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 32, 34]
-    t_levels = [70, 75, 80, 85, 90, 100, 110, 120, 150, 240] #1500g [55, 60, 65, 70, 80, 90, 100, 120, 150, 240] #600g [40, 45, 50, 55, 60, 65, 75, 90, 120, 180]
+    alt_levels = [12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 24, 26, 28] #300g [36, 37, 38, 39, 40, 41, 42] 1500g [29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39] #600g [20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 32, 34]
+    t_levels = [30, 35, 40, 45, 50, 60, 75, 90, 120] #300g [70, 75, 80, 85, 90, 100, 110, 120, 150, 240]#1500g [55, 60, 65, 70, 80, 90, 100, 120, 150, 240] #600g [40, 45, 50, 55, 60, 65, 75, 90, 120, 180]
 
     cs1 = ax.contour(
         M, V, Z_alt,
@@ -1073,7 +1074,7 @@ if __name__ == "__main__":
         zorder=20,
     )'''
 
-    ax.set_title("Kaymont 4000g Meteorological Balloon Design Space (MSL, USSA76)")
+    ax.set_title("Kaymont 300g Meteorological Balloon Design Space (MSL, USSA76)")
     ax.set_xlabel("Payload Mass (kg)")
 
     ax.xaxis.set_minor_locator(tic.AutoMinorLocator())
