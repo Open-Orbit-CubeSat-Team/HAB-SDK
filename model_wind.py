@@ -610,7 +610,7 @@ class Model:
 
         F = buoyancy + weight + drag
 
-        if buoyant and 15900.0 <= z <= 16100.0:
+        '''if buoyant and 15900.0 <= z <= 16100.0:
             print(
                 f"z={z:8.1f} "
                 f"vz={vz:7.3f} "
@@ -625,7 +625,7 @@ class Model:
                 f"Dz={drag[2]:10.4f} "
                 f"Fz={F[2]:10.4f} "
                 f"az={F[2]/mass:9.5f}"
-            )
+            )'''
 
         return F / mass
 
