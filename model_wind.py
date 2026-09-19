@@ -15,21 +15,17 @@ from datetime import timedelta, datetime, timezone
 
 R_E = 6356766.0
 
-
 def _wrap_lon_180(lon_deg: float) -> float:
     return ((float(lon_deg) + 180.0) % 360.0) - 180.0
 
-
 def _clamp01(x: float) -> float:
     return max(0.0, min(1.0, float(x)))
-
 
 @dataclass(frozen=False)
 class LaunchSite:
     latitude: float
     longitude: float
     altitude: Optional[float] = None
-
 
 @dataclass(frozen=False)
 class Balloon:
@@ -43,7 +39,6 @@ class Balloon:
     def __post_init__(self):
         self.gas_moles = self.gas_volume * 3.048 ** 3 / 22.413636  # ft^3 to L to mol
 
-
 @dataclass(frozen=False)
 class Payload:
     mass: float
@@ -54,14 +49,12 @@ class Payload:
     def __post_init__(self):
         self.parachute_area = self.parachute_diameter ** 2 * math.pi / 4
 
-
 @dataclass(frozen=False)
 class MissionProfile:
     launch_site: LaunchSite
     balloon: Balloon
     payload: Payload
     launch_time_utc: datetime | str
-
 
 @dataclass(frozen=False)
 class FlightProfile(MissionProfile):
@@ -79,12 +72,15 @@ class FlightProfile(MissionProfile):
     gravities: list[float]
     wind_u: list[float]   # east (m/s)
     wind_v: list[float]   # north (m/s)
+    cd_values: list[float]
     burst_altitude: float
     burst_latitude: float
     burst_longitude: float
     max_altitude: float
     burst_time: float
     flight_time: float
+    wind_kind: str
+    wind_cycle_utc: str
 
 @dataclass(frozen=False)
 class GroundNode:
@@ -92,7 +88,6 @@ class GroundNode:
     longitude: float
     altitude: Optional[float] = None
     name: str = "Ground Node"
-
 
 @dataclass(frozen=False)
 class NodeObservationProfile:
@@ -114,7 +109,6 @@ class ConstantTerrain:
 
     def elevation(self, lat_deg: float, lon_deg: float) -> float:
         return self.elevation_m
-
 
 class ETOPO1Terrain:
     """
@@ -224,7 +218,6 @@ WGS84_A = 6378137.0
 WGS84_F = 1.0 / 298.257223563
 WGS84_E2 = WGS84_F * (2.0 - WGS84_F)
 
-
 def geodetic_to_ecef(lat_deg: float, lon_deg: float, alt_m: float) -> np.ndarray:
     lat = math.radians(float(lat_deg))
     lon = math.radians(float(lon_deg))
@@ -242,7 +235,6 @@ def geodetic_to_ecef(lat_deg: float, lon_deg: float, alt_m: float) -> np.ndarray
     z = (N * (1.0 - WGS84_E2) + alt) * sin_lat
     return np.array([x, y, z], dtype=float)
 
-
 def ecef_to_enu_matrix(lat_deg: float, lon_deg: float) -> np.ndarray:
     lat = math.radians(float(lat_deg))
     lon = math.radians(float(lon_deg))
@@ -257,7 +249,6 @@ def ecef_to_enu_matrix(lat_deg: float, lon_deg: float) -> np.ndarray:
         [-sin_lat * cos_lon,   -sin_lat * sin_lon,     cos_lat],
         [ cos_lat * cos_lon,    cos_lat * sin_lon,     sin_lat],
     ], dtype=float)
-
 
 def slant_range_az_el(
     observer_lat_deg: float,
@@ -287,10 +278,8 @@ def slant_range_az_el(
 def _shortest_dlon_deg(lon1_deg: float, lon0_deg: float) -> float:
     return ((float(lon1_deg) - float(lon0_deg) + 180.0) % 360.0) - 180.0
 
-
 def _interp_lon_shortest(lon0_deg: float, lon1_deg: float, f: float) -> float:
     return _wrap_lon_180(float(lon0_deg) + f * _shortest_dlon_deg(lon1_deg, lon0_deg))
-
 
 def _surface_distance_m(lat0_deg: float, lon0_deg: float, lat1_deg: float, lon1_deg: float) -> float:
     lat0 = math.radians(float(lat0_deg))
@@ -302,7 +291,6 @@ def _surface_distance_m(lat0_deg: float, lon0_deg: float, lat1_deg: float, lon1_
     x = dlon * math.cos(latm)
     y = dlat
     return R_E * math.hypot(x, y)
-
 
 def terrain_line_of_sight_clear(
     observer_lat_deg: float,
@@ -413,7 +401,6 @@ def compute_node_observations(
         terrain_clear=terrain_clear,
     )
 
-
 def compute_node_observations_batch(
     flight_profiles,
     ground_nodes,
@@ -444,12 +431,13 @@ class Model:
     helium_mm = 4.002602
     atmosphere = standardAtmosphere()
 
-    def __init__(self, time_step, profiles, result, wind=None, terrain=None, run_time_utc=None):
+    def __init__(self, time_step, profiles, result, wind=None, terrain=None, run_time_utc=None, ascent_cd_scale: float = 1.0):
         self.time_step = time_step
         self.profiles = profiles
         self.result = result
         self.wind = wind
         self.terrain = terrain if terrain is not None else ETOPO1Terrain()
+        self.ascent_cd_scale = float(ascent_cd_scale)
 
         if isinstance(run_time_utc, str):
             self.run_time_utc = datetime.strptime(run_time_utc, "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
@@ -480,6 +468,99 @@ class Model:
 
         return run_time
 
+    def _mu_air_sutherland(self, T_K: float) -> float:
+        mu0 = 1.716e-5   # Pa*s
+        T0 = 273.15      # K
+        S = 110.4        # K
+        return mu0 * (T_K / T0) ** 1.5 * (T0 + S) / (T_K + S)
+
+    def _sphere_cd_morrison(self, Re: float) -> float:
+        Re = max(float(Re), 1e-12)
+        '''return (
+            24.0 / Re
+            + 2.6 * (Re / 5.0) / (1.0 + (Re / 5.0) ** 1.52)
+            + 0.411 * (Re / 2.63e5) ** (-7.94) / (1.0 + (Re / 2.63e5) ** (-8.0))
+            + 0.25 * (Re / 1e6) / (1.0 + (Re / 1e6))
+        )'''
+        return (
+            24.0 / Re
+            + 2.6 * (Re / 5.0) / (1.0 + (Re / 5.0) ** 1.52)
+            + 0.55 * (Re / 4.3e5) ** (-5.44) / (1.0 + (Re / 4.3e5) ** (-5.5))
+            + 0.41 * (Re / 6.5e5) ** 5.0 / (1.0 + (Re / 6.5e5) ** 5.0)
+        )
+    
+    '''def _sphere_cd_schiller_naumann(self, Re: float) -> float:
+        Re = max(float(Re), 1e-12)
+
+        # Classical Schiller–Naumann:
+        #   Cd = 24/Re * (1 + 0.15 Re^0.687),   Re < ~1000
+        # Often paired with a constant high-Re plateau above that.
+        if Re < 1000.0:
+            return 24.0 / Re * (1.0 + 0.15 * Re**0.687)
+
+        return 0.44'''
+    
+    '''def _sphere_cd_clift_gauvin(self, Re: float) -> float:
+        Re = max(float(Re), 1e-12)
+
+        return (
+            24.0 / Re * (1.0 + 0.15 * Re**0.687)
+            + 0.42 / (1.0 + 42500.0 / Re**1.16)
+        )'''
+    
+    '''def _sphere_cd_hoerner(self, Re: float) -> float:
+        Re = max(float(Re), 1e-12)
+
+        # Stokes regime
+        if Re < 1.0:
+            return 24.0 / Re
+
+        # Transitional
+        if Re < 1000.0:
+            return 24.0 / Re * (1.0 + 0.15 * Re**0.687)
+
+        # Subcritical (smooth-ish sphere)
+        if Re < 2e5:
+            return 0.44
+
+        # Drag crisis / rough balloon behavior
+        if Re < 1e6:
+            return 0.25
+
+        # Supercritical plateau
+        return 0.20'''
+    
+    def _diagnostic_cd(self, r, v, profile, current_time, lat, lon, x_prev, y_prev, buoyant, Cd_fallback):
+        z = float(r[2])
+
+        pressure, temperature, density, gravity = self.atmosphere._Qualities(z)
+
+        dx = float(r[0] - x_prev)
+        dy = float(r[1] - y_prev)
+
+        lat_new = lat + math.degrees(dy / R_E)
+        cos_lat = max(1.0e-8, abs(math.cos(math.radians(lat_new))))
+        lon_new = _wrap_lon_180(lon + math.degrees(dx / (R_E * cos_lat)))
+
+        if self.wind:
+            u_wind, v_wind = self.wind.uv(current_time, z, lat_new, lon_new)
+        else:
+            u_wind = v_wind = 0.0
+
+        if not buoyant:
+            return float(Cd_fallback)
+
+        volume = self._safe_balloon_volume(profile.balloon.gas_moles, temperature, pressure)
+        diameter = (6.0 * volume / np.pi) ** (1.0 / 3.0)
+
+        v_rel = np.array([v[0] - u_wind, v[1] - v_wind, v[2]], dtype=float)
+        v_rel_mag = float(np.linalg.norm(v_rel))
+
+        mu = self._mu_air_sutherland(temperature)
+        Re = density * v_rel_mag * diameter / max(mu, 1e-12)
+
+        return self.ascent_cd_scale * self._sphere_cd_morrison(Re)
+
     # -------------------------
     # Core 3-DOF acceleration
     # -------------------------
@@ -507,6 +588,15 @@ class Model:
         v_rel = np.array([vx - u_wind, vy - v_wind, vz], dtype=float)
         v_rel_mag = np.linalg.norm(v_rel)
 
+        if buoyant:
+            volume = self._safe_balloon_volume(profile.balloon.gas_moles, temperature, pressure)
+            diameter = (6.0 * volume / np.pi) ** (1.0 / 3.0)
+            area = np.pi * diameter**2 / 4.0
+
+            mu = self._mu_air_sutherland(temperature)
+            Re = density * v_rel_mag * diameter / max(mu, 1e-12)
+            Cd = self.ascent_cd_scale * self._sphere_cd_morrison(Re)
+
         # Drag (vector)
         drag = -0.5 * density * Cd * area * v_rel_mag * v_rel
 
@@ -519,6 +609,24 @@ class Model:
         weight = np.array([0.0, 0.0, -gravity * mass], dtype=float)
 
         F = buoyancy + weight + drag
+
+        if buoyant and 15900.0 <= z <= 16100.0:
+            print(
+                f"z={z:8.1f} "
+                f"vz={vz:7.3f} "
+                f"rho={density:9.6f} "
+                f"T={temperature:7.3f} "
+                f"p={pressure:8.4f} "
+                f"V={volume:9.4f} "
+                f"A={area:8.4f} "
+                f"Cd={Cd:7.4f} "
+                f"Bz={buoyancy[2]:10.4f} "
+                f"Wz={weight[2]:10.4f} "
+                f"Dz={drag[2]:10.4f} "
+                f"Fz={F[2]:10.4f} "
+                f"az={F[2]/mass:9.5f}"
+            )
+
         return F / mass
 
     # -------------------------
@@ -538,6 +646,9 @@ class Model:
             z0 = max(topo_z0, user_z0)
             profile.launch_site.altitude = z0
 
+            wind_kind = type(self.wind).__name__.replace("Wind", "").lower()
+            wind_cycle = getattr(self.wind, "run_utc_str", "unknown")
+
             # Local tangent-plane state
             r = np.array([0.0, 0.0, z0], dtype=float)
             v = np.array([0.0, 0.0, 0.0], dtype=float)
@@ -556,6 +667,7 @@ class Model:
             gravities = []
             wind_u = []
             wind_v = []
+            cd_values = []
 
             ascent_mass = (
                 profile.payload.mass
@@ -587,6 +699,21 @@ class Model:
             wind_u.append(float(u_wind))
             wind_v.append(float(v_wind))
 
+            cd_values.append(
+                self._diagnostic_cd(
+                    r=r,
+                    v=v,
+                    profile=profile,
+                    current_time=current_time,
+                    lat=lat,
+                    lon=lon,
+                    x_prev=x_prev,
+                    y_prev=y_prev,
+                    buoyant=True,
+                    Cd_fallback=profile.balloon.drag_coefficient,
+                )
+            )
+
             while True:
                 step_count += 1
                 if step_count > max_steps:
@@ -615,7 +742,9 @@ class Model:
                 if burst_altitude is None:
                     volume = self._safe_balloon_volume(profile.balloon.gas_moles, temperature, pressure)
                     buoyant = True
-                    if volume >= burst_volume:
+                    #if volume >= burst_volume:
+                    #if pressure <= 5.8345:
+                    if r[2] >= 26820.6:
                         burst_altitude = r[2]
                         burst_latitude = lat
                         burst_longitude = lon
@@ -652,6 +781,45 @@ class Model:
 
                 r, v, a = Integrator.rk4_second_order(r, v, accel_fn, self.time_step)
 
+                if step_count % 50 == 0:
+                    z = float(r[2])
+                    #vx, vy, vz = v
+
+                    pressure, temperature, density, gravity = self.atmosphere._Qualities(z)
+
+                    if self.wind:
+                        u_wind, v_wind = self.wind.uv(current_time, z, lat, lon)
+                    else:
+                        u_wind = v_wind = 0.0
+
+                    '''volume = self._safe_balloon_volume(profile.balloon.gas_moles, temperature, pressure)
+                    diameter = (6.0 * volume / np.pi) ** (1.0 / 3.0)
+
+                    mu = self._mu_air_sutherland(temperature)
+
+                    v_rel = np.array([vx - u_wind, vy - v_wind, vz])
+                    v_rel_mag = np.linalg.norm(v_rel)
+
+                    horiz_rel = np.hypot(vx - u_wind, vy - v_wind)
+
+                    Re_full = density * v_rel_mag * diameter / max(mu, 1e-12)
+                    Re_vert = density * abs(vz) * diameter / max(mu, 1e-12)
+
+                    print(
+                        f"z={z:8.1f}  "
+                        f"vz={vz:7.3f}  "
+                        f"hrel={horiz_rel:7.3f}  "
+                        f"Re_full={Re_full:10.1f}  "
+                        f"Re_vert={Re_vert:10.1f}"
+                    )
+                    print(
+                        f"z={z:8.1f} "
+                        f"vz={vz:7.3f} "
+                        f"Re={Re_full:10.1f} "
+                        f"V={volume:10.3f} "
+                        f"D={diameter:8.3f}"
+                    )'''
+
                 if not self._state_is_finite(r, v, a):
                     if burst_altitude is None:
                         burst_altitude = float("nan")
@@ -673,6 +841,7 @@ class Model:
                     forces.append((a * mass).copy() if np.all(np.isfinite(a)) else np.zeros(3))
                     wind_u.append(float(u_wind) if np.isfinite(u_wind) else 0.0)
                     wind_v.append(float(v_wind) if np.isfinite(v_wind) else 0.0)
+                    cd_values.append(0.0)
                     break
 
                 # Early-ascent viability check
@@ -711,6 +880,21 @@ class Model:
                 wind_u.append(float(u_wind))
                 wind_v.append(float(v_wind))
 
+                cd_values.append(
+                    self._diagnostic_cd(
+                        r=r,
+                        v=v,
+                        profile=profile,
+                        current_time=current_time_next,
+                        lat=lat,
+                        lon=lon,
+                        x_prev=x_prev,
+                        y_prev=y_prev,
+                        buoyant=buoyant,
+                        Cd_fallback=Cd,
+                    )
+                )
+
                 # Terrain-aware landing condition after burst
                 if burst_altitude is not None and r[2] <= ground_next:
                     h_prev = r_prev[2] - prev_ground
@@ -747,6 +931,7 @@ class Model:
                     r[2] = touch_ground
                     break
 
+
             self.result.append(
                 FlightProfile(
                     profile.launch_site,
@@ -767,12 +952,15 @@ class Model:
                     gravities,
                     wind_u,
                     wind_v,
+                    cd_values,
                     float("nan") if burst_altitude is None else float(burst_altitude),
                     float("nan") if burst_latitude is None else float(burst_latitude),
                     float("nan") if burst_longitude is None else float(_wrap_lon_180(burst_longitude)),
                     float(np.max(altitudes)),
                     float("nan") if burst_time is None else float(burst_time),
                     float(times[-1]),
+                    wind_kind=wind_kind,
+                    wind_cycle_utc=wind_cycle,
                 )
             )
 
