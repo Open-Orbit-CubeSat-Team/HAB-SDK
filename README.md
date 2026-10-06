@@ -35,3 +35,27 @@ Remove-Item -Recurse -Force "$env:USERPROFILE\miniforge3\envs\hab-sdk" -ErrorAct
 mamba env create -f environment.yml
 conda activate hab-sdk
 ```
+
+## Dependencies
+```
+dependencies:
+  - python=3.12
+  - numpy
+  - pandas
+  - scipy
+  - matplotlib
+  - requests
+  - tqdm
+  - xarray
+  - netcdf4
+  - cfgrib
+  - eccodes
+  - herbie-data
+  - pyproj
+  - rasterio
+  - geopandas
+  - contextily
+  - cartopy
+  - jupyterlab
+  - ipykernel
+  ```

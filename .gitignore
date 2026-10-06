@@ -1,0 +1,16 @@
+# python environment
+environment.yaml
+venv
+.venv
+env
+shell.nix
+.claude
+
+# Pycache
+__pycache__
+
+#Generated Folders
+/gfs_downloads/
+/hrrr_downloads/
+/terrain_cache/
+/outputs
